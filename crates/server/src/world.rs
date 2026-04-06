@@ -45,7 +45,8 @@ pub struct AttackOrder {
 }
 
 pub struct ProductionQueue {
-    pub current:  Option<(String, f32)>,
+    /// (kind_id, zbývající_čas, celkový_čas)
+    pub current:  Option<(String, f32, f32)>,
     pub capacity: usize,
     pub queue:    Vec<String>,
     pub rally:    Vec2,
@@ -54,20 +55,60 @@ impl ProductionQueue {
     pub fn new(cap: usize) -> Self {
         Self { current: None, capacity: cap, queue: Vec::new(), rally: Vec2::ZERO }
     }
+    pub fn start(&mut self, kind: String, total: f32) {
+        self.current = Some((kind, total, total));
+    }
     pub fn enqueue(&mut self, kind: String) -> bool {
         if self.queue.len() < self.capacity { self.queue.push(kind); true } else { false }
+    }
+    /// Postup výroby 0.0..1.0 (0 = právě začalo, 1 = hotovo)
+    pub fn progress(&self) -> f32 {
+        match &self.current {
+            Some((_, rem, total)) if *total > 0.0 => (1.0 - rem / total).clamp(0.0, 1.0),
+            _ => 0.0,
+        }
+    }
+}
+
+// ── Hlídkování ────────────────────────────────────────────────────────────────
+
+pub struct PatrolOrder {
+    pub point_a: Vec2,
+    pub point_b: Vec2,
+    /// true = jdeme k point_b, false = jdeme k point_a
+    pub going_b: bool,
+}
+
+// ── Cooldowny schopností ──────────────────────────────────────────────────────
+
+pub struct AbilityCooldowns {
+    pub map: std::collections::HashMap<String, f32>,
+}
+impl AbilityCooldowns {
+    pub fn new() -> Self { Self { map: Default::default() } }
+    pub fn is_ready(&self, id: &str) -> bool {
+        self.map.get(id).copied().unwrap_or(0.0) <= 0.0
+    }
+    pub fn set(&mut self, id: String, cd: f32) {
+        self.map.insert(id, cd);
+    }
+    pub fn tick(&mut self, dt: f32) {
+        for v in self.map.values_mut() { *v = (*v - dt).max(0.0); }
     }
 }
 
 pub struct AiController {
-    pub script_id:     String,
-    pub tick_timer:    f32,
-    pub tick_interval: f32,
-    pub state_json:    String,
+    pub script_id:       String,
+    pub tick_timer:      f32,
+    pub tick_interval:   f32,
+    pub state_json:      String,
+    /// Počet ticků po které AI nesmí přepisovat rozkazy hráče.
+    pub player_override: u32,
 }
 impl AiController {
     pub fn new(script_id: impl Into<String>, interval: f32) -> Self {
-        Self { script_id: script_id.into(), tick_timer: 0.0, tick_interval: interval, state_json: "{}".into() }
+        Self { script_id: script_id.into(), tick_timer: 0.0, tick_interval: interval,
+               state_json: "{}".into(), player_override: 0 }
     }
 }
 

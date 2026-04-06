@@ -2,9 +2,10 @@
 -- Globální registry, utility a výchozí hooky.
 
 -- ── Registry ────────────────────────────────────────────────────────────────
-UnitDefs    = {}   -- kind_id → def table
-BuildingDefs = {}  -- kind_id → def table
-AiDefs      = {}   -- script_id → { on_tick = fn, on_spawned = fn, ... }
+UnitDefs     = {}   -- kind_id → def table
+BuildingDefs = {}   -- kind_id → def table
+AiDefs       = {}   -- script_id → { on_tick = fn, ... }
+AbilityDefs  = {}   -- ability_id → def table
 
 -- ── Registrace ───────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ function RegisterUnit(def)
     def.cost_lumber  = def.cost_lumber  or 0
     def.build_time   = def.build_time   or 30.0
     def.ai_script    = def.ai_script    or nil
+    def.abilities    = def.abilities    or {}     -- seznam ability_id
     UnitDefs[def.kind] = def
 end
 
@@ -46,6 +48,19 @@ end
 function RegisterAi(script_id, def)
     assert(def.on_tick, "RegisterAi: chybí 'on_tick'")
     AiDefs[script_id] = def
+end
+
+--- Zaregistruje aktivní schopnost.
+--- def = { id, name, hotkey, target, cooldown, handler }
+---   target: "none" | "unit" | "point"
+function RegisterAbility(def)
+    assert(def.id,   "RegisterAbility: chybí 'id'")
+    assert(def.name, "RegisterAbility: chybí 'name'")
+    def.hotkey   = def.hotkey   or ""
+    def.target   = def.target   or "none"
+    def.cooldown = def.cooldown or 0.0
+    def.handler  = def.handler  or function() end
+    AbilityDefs[def.id] = def
 end
 
 -- ── Pohybové parametry z definice ────────────────────────────────────────────
@@ -87,6 +102,18 @@ function on_unit_hit(unit, damage, attacker_id)   end
 function on_unit_trained(unit, building_id)       end
 function on_game_tick(dt)                         end
 function on_resource_changed(gold, lumber, oil)   end
+
+--- Voláno serverem při použití schopnosti hráčem.
+--- caster    = unit info table
+--- ability_id = string
+--- target_id  = number | nil
+--- tx, ty    = cílová pozice (pro "point" schopnosti)
+function on_ability_used(caster, ability_id, target_id, tx, ty)
+    local def = AbilityDefs[ability_id]
+    if def and def.handler then
+        def.handler(caster, target_id, tx, ty)
+    end
+end
 
 -- ── Utility ──────────────────────────────────────────────────────────────────
 

@@ -45,15 +45,16 @@ pub fn unit_to_table(lua: &Lua, u: &UnitInfo) -> LuaResult<LuaTable> {
 
 #[derive(Debug)]
 pub enum ScriptCmd {
-    MoveUnit    { entity_id: u64, target_x: f32, target_y: f32, speed: f32 },
-    AttackUnit  { attacker_id: u64, target_id: u64 },
-    StopUnit    { entity_id: u64 },
-    SetHealth   { entity_id: u64, hp: i32 },
-    KillUnit    { entity_id: u64 },
-    SpawnUnit   { kind_id: String, x: f32, y: f32, team: u8 },
-    TrainUnit   { building_id: u64, kind_id: String, build_time: f32 },
-    SetRally    { building_id: u64, x: f32, y: f32 },
-    SetAi       { entity_id: u64, script_id: String, tick_interval: f32 },
+    MoveUnit           { entity_id: u64, target_x: f32, target_y: f32, speed: f32 },
+    AttackUnit         { attacker_id: u64, target_id: u64 },
+    StopUnit           { entity_id: u64 },
+    SetHealth          { entity_id: u64, hp: i32 },
+    KillUnit           { entity_id: u64 },
+    SpawnUnit          { kind_id: String, x: f32, y: f32, team: u8 },
+    TrainUnit          { building_id: u64, kind_id: String, build_time: f32 },
+    SetRally           { building_id: u64, x: f32, y: f32 },
+    SetAi              { entity_id: u64, script_id: String, tick_interval: f32 },
+    SetAbilityCooldown { entity_id: u64, ability_id: String, cooldown: f32 },
 }
 
 // ── LuaRuntime ────────────────────────────────────────────────────────────────
@@ -170,6 +171,28 @@ impl LuaRuntime {
         Ok(())
     }
 
+    /// on_ability_used(caster, ability_id, target_id_or_nil, target_x, target_y)
+    pub fn hook_ability_used(
+        &self,
+        caster:     &UnitInfo,
+        ability_id: &str,
+        target_id:  Option<u64>,
+        target_x:   f32,
+        target_y:   f32,
+    ) -> LuaResult<()> {
+        let globals = self.lua.globals();
+        let f: Option<LuaFunction> = globals.get("on_ability_used")?;
+        if let Some(f) = f {
+            let ctbl    = unit_to_table(&self.lua, caster)?;
+            let tid_val: LuaValue = match target_id {
+                Some(id) => LuaValue::Integer(id as i64),
+                None     => LuaValue::Nil,
+            };
+            f.call::<()>((ctbl, ability_id.to_string(), tid_val, target_x, target_y))?;
+        }
+        Ok(())
+    }
+
     /// Vrátí a vymaže frontu ScriptCmd.
     pub fn drain_commands(&self) -> LuaResult<Vec<ScriptCmd>> {
         let globals = self.lua.globals();
@@ -247,6 +270,15 @@ fn register_api(lua: &Lua, assets_dir: PathBuf) -> LuaResult<()> {
         let cmd = lua.create_table()?;
         cmd.set("cmd", "set_rally")?; cmd.set("building_id", bid)?;
         cmd.set("x", x)?; cmd.set("y", y)?;
+        push_cmd(lua, cmd)
+    })?)?;
+
+    e.set("set_ability_cooldown", lua.create_function(|lua, (id, ability, cd): (u64, String, f32)| {
+        let cmd = lua.create_table()?;
+        cmd.set("cmd", "set_ability_cooldown")?;
+        cmd.set("entity_id",  id)?;
+        cmd.set("ability_id", ability)?;
+        cmd.set("cooldown",   cd)?;
         push_cmd(lua, cmd)
     })?)?;
 
@@ -328,6 +360,11 @@ fn table_to_cmd(t: &LuaTable) -> LuaResult<ScriptCmd> {
         "train_unit"  => Ok(ScriptCmd::TrainUnit   { building_id: t.get("building_id")?, kind_id: t.get("kind_id")?, build_time: t.get::<f32>("build_time").unwrap_or(0.0) }),
         "set_rally"   => Ok(ScriptCmd::SetRally    { building_id: t.get("building_id")?, x: t.get("x")?, y: t.get("y")? }),
         "set_ai"      => Ok(ScriptCmd::SetAi       { entity_id: t.get("entity_id")?, script_id: t.get("script_id")?, tick_interval: t.get::<f32>("tick_interval").unwrap_or(1.0) }),
+        "set_ability_cooldown" => Ok(ScriptCmd::SetAbilityCooldown {
+            entity_id:  t.get("entity_id")?,
+            ability_id: t.get("ability_id")?,
+            cooldown:   t.get::<f32>("cooldown").unwrap_or(0.0),
+        }),
         other => Err(LuaError::RuntimeError(format!("neznámý cmd: {other}"))),
     }
 }

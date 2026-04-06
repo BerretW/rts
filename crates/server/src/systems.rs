@@ -119,10 +119,11 @@ pub fn production_system(world: &mut World, dt: f32) -> Vec<ProductionDone> {
         if pq.current.is_none() {
             if let Some(next) = pq.queue.first().cloned() {
                 pq.queue.remove(0);
-                pq.current = Some((next, 15.0));
+                let total = default_build_time(&next);
+                pq.current = Some((next, total, total));
             }
         }
-        if let Some((ref kind_id, ref mut timer)) = pq.current {
+        if let Some((ref kind_id, ref mut timer, _total)) = pq.current {
             *timer -= dt;
             if *timer <= 0.0 {
                 done.push(ProductionDone {
@@ -138,11 +139,63 @@ pub fn production_system(world: &mut World, dt: f32) -> Vec<ProductionDone> {
     done
 }
 
+fn default_build_time(kind: &str) -> f32 {
+    match kind {
+        "peasant" | "peon"              => 15.0,
+        "footman" | "grunt"             => 20.0,
+        "archer"  | "troll_axethrower"  => 20.0,
+        "knight"  | "ogre"              => 30.0,
+        "mage"    | "death_knight"      => 35.0,
+        "gryphon_rider" | "dragon"      => 45.0,
+        _                               => 20.0,
+    }
+}
+
+// ── Patrol systém ─────────────────────────────────────────────────────────────
+
+pub fn patrol_system(world: &mut World) {
+    // Sbíráme entity s PatrolOrder
+    let patrolling: Vec<(hecs::Entity, Vec2, Vec2, bool)> = world
+        .query::<&PatrolOrder>().iter()
+        .map(|(e, p)| (e, p.point_a, p.point_b, p.going_b))
+        .collect();
+
+    for (entity, point_a, point_b, going_b) in patrolling {
+        // Pokud má MoveOrder nebo AttackOrder → stále se pohybuje/útočí, nech ho
+        let busy = world.get::<&MoveOrder>(entity).is_ok()
+                || world.get::<&AttackOrder>(entity).is_ok();
+        if busy { continue; }
+
+        // Dorazil na waypoint – otočíme směr
+        if let Ok(mut p) = world.get::<&mut PatrolOrder>(entity) {
+            p.going_b = !going_b;
+        }
+        let target = if going_b { point_a } else { point_b };
+        let flags  = world.get::<&MoveFlags>(entity).ok()
+            .map(|f| (*f).clone()).unwrap_or_default();
+        let _      = world.insert_one(entity, MoveOrder { target, speed: 128.0, flags });
+    }
+}
+
+// ── Cooldown schopností ───────────────────────────────────────────────────────
+
+pub fn ability_cooldown_system(world: &mut World, dt: f32) {
+    for (_, cd) in world.query_mut::<&mut AbilityCooldowns>() {
+        cd.tick(dt);
+    }
+}
+
 pub struct AiTickEvent { pub entity_id: u64, pub script_id: String }
 
 pub fn ai_tick_system(world: &mut World, dt: f32) -> Vec<AiTickEvent> {
     let mut ticks = Vec::new();
     for (entity, ctrl) in world.query_mut::<&mut AiController>() {
+        // Pokud hráč vydal rozkaz, AI čeká
+        if ctrl.player_override > 0 {
+            ctrl.player_override -= 1;
+            ctrl.tick_timer = ctrl.tick_interval; // resetuj timer
+            continue;
+        }
         ctrl.tick_timer -= dt;
         if ctrl.tick_timer <= 0.0 {
             ctrl.tick_timer = ctrl.tick_interval;

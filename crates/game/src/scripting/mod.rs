@@ -160,14 +160,18 @@ impl LuaRuntime {
             log::warn!("scripting: složka {:?} neexistuje", scripts_dir);
             return Ok(());
         }
-        let mut modules: Vec<std::path::PathBuf> = std::fs::read_dir(scripts_dir)
+        let mut modules: Vec<(std::path::PathBuf, i64)> = std::fs::read_dir(scripts_dir)
             .map_err(|e| LuaError::RuntimeError(e.to_string()))?
             .flatten()
             .filter(|e| e.path().is_dir() && e.path().join("manifest.lua").exists())
-            .map(|e| e.path())
+            .map(|e| {
+                let path  = e.path();
+                let order = manifest_load_order(&path);
+                (path, order)
+            })
             .collect();
-        modules.sort();
-        for m in modules { self.load_module(&m)?; }
+        modules.sort_by(|(a, oa), (b, ob)| oa.cmp(ob).then(a.cmp(b)));
+        for (m, _) in modules { self.load_module(&m)?; }
         Ok(())
     }
 
@@ -341,6 +345,21 @@ impl LuaRuntime {
 
     /// Přímý přístup k Lua globals (pro unit info queries z in_game.rs)
     pub fn lua(&self) -> &Lua { &self.lua }
+}
+
+fn manifest_load_order(module_path: &std::path::Path) -> i64 {
+    let Ok(text) = std::fs::read_to_string(module_path.join("manifest.lua")) else {
+        return 100;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("load_order") {
+            let rest = rest.trim_start().strip_prefix('=').unwrap_or("").trim();
+            let rest = rest.trim_end_matches(',').trim();
+            if let Ok(n) = rest.parse::<i64>() { return n; }
+        }
+    }
+    100
 }
 
 // ── Konverzní funkce ──────────────────────────────────────────────────────────

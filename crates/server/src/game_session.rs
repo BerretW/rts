@@ -125,18 +125,22 @@ async fn run_session(
             pending.push((cid, actions));
         }
 
-        // Aplikuj akce hráčů
+        // Aplikuj akce hráčů; sesbíráme použití schopností pro Lua zpracování
+        // (team, unit_id, ability_id, target_id, tx, ty)
+        let mut ability_events: Vec<(u8, u64, String, Option<u64>, f32, f32)> = Vec::new();
         for (client_id, actions) in pending {
             let team = players.iter().enumerate()
                 .find(|(_, p)| p.handle.id == client_id)
                 .map(|(i, _)| i as u8)
                 .unwrap_or(0);
-            apply_player_actions(&mut world, team, actions);
+            apply_player_actions(&mut world, team, actions, &mut ability_events);
         }
 
         // Systémy (blokují – herní logika je sync)
         movement_system(&mut world, &map, dt);
+        patrol_system(&mut world);
         attack_system(&mut world, dt);
+        ability_cooldown_system(&mut world, dt);
         let produced = production_system(&mut world, dt);
         let ai_events = ai_tick_system(&mut world, dt);
         let dead = cleanup_dead(&mut world);
@@ -155,6 +159,18 @@ async fn run_session(
         let all = collect_all_infos(&world);
         let _ = lua.push_query_results(&all);
         let _ = lua.push_unit_cache(&all);
+
+        // Zpracuj použití schopností přes Lua
+        for (_, unit_id, ability_id, target_id, tx, ty) in ability_events {
+            if let Some(entity) = hecs::Entity::from_bits(unit_id) {
+                if let Some(info) = unit_info(&world, entity) {
+                    if let Err(e) = lua.hook_ability_used(&info, &ability_id, target_id, tx, ty) {
+                        log::warn!("on_ability_used: {e}");
+                    }
+                }
+            }
+        }
+
         for ev in ai_events {
             if let Some(entity) = hecs::Entity::from_bits(ev.entity_id) {
                 if let Some(info) = unit_info(&world, entity) {
@@ -206,23 +222,34 @@ async fn run_session(
 
 // ── Pomocné funkce ────────────────────────────────────────────────────────────
 
-fn apply_player_actions(world: &mut World, team: u8, actions: Vec<PlayerAction>) {
+fn apply_player_actions(
+    world:          &mut World,
+    team:           u8,
+    actions:        Vec<PlayerAction>,
+    ability_events: &mut Vec<(u8, u64, String, Option<u64>, f32, f32)>,
+) {
     for action in actions {
         match action {
             PlayerAction::MoveUnits { unit_ids, target_x, target_y } => {
                 for (i, uid) in unit_ids.iter().enumerate() {
                     if let Some(e) = hecs::Entity::from_bits(*uid) {
                         if let Ok(t) = world.get::<&Team>(e) {
-                            if t.0 != team { continue; } // bezpečnost – vlastní tým
+                            if t.0 != team { continue; }
                         }
                         let ox = (i as i32 % 5 - 2) as f32 * TILE_SIZE;
                         let oy = (i as i32 / 5 - 1) as f32 * TILE_SIZE;
                         let target = Vec2::new(target_x + ox, target_y + oy);
                         let flags = world.get::<&MoveFlags>(e).ok()
                             .map(|f| (*f).clone()).unwrap_or_default();
-                        let speed = 128.0f32;
+                        let speed = world.get::<&AttackStats>(e).ok()
+                            .map(|_| 128.0f32).unwrap_or(128.0);
                         let _ = world.remove_one::<MoveOrder>(e);
+                        let _ = world.remove_one::<AttackOrder>(e);
                         let _ = world.insert_one(e, MoveOrder { target, speed, flags });
+                        // Potlač AI na ~5 sekund (100 ticků po 50ms)
+                        if let Ok(mut ai) = world.get::<&mut AiController>(e) {
+                            ai.player_override = 100;
+                        }
                     }
                 }
             }
@@ -230,8 +257,12 @@ fn apply_player_actions(world: &mut World, team: u8, actions: Vec<PlayerAction>)
                 let target = match hecs::Entity::from_bits(target_id) { Some(e) => e, None => continue };
                 for uid in attacker_ids {
                     if let Some(e) = hecs::Entity::from_bits(uid) {
+                        let _ = world.remove_one::<MoveOrder>(e);
                         let _ = world.remove_one::<AttackOrder>(e);
                         let _ = world.insert_one(e, AttackOrder { target });
+                        if let Ok(mut ai) = world.get::<&mut AiController>(e) {
+                            ai.player_override = 200; // útok potlačí AI na ~10s
+                        }
                     }
                 }
             }
@@ -241,20 +272,53 @@ fn apply_player_actions(world: &mut World, team: u8, actions: Vec<PlayerAction>)
                         let _ = world.remove_one::<MoveOrder>(e);
                         let _ = world.remove_one::<AttackOrder>(e);
                         if let Ok(mut v) = world.get::<&mut Velocity>(e) { v.0 = Vec2::ZERO; }
+                        if let Ok(mut ai) = world.get::<&mut AiController>(e) {
+                            ai.player_override = 40; // krátká pauza
+                        }
                     }
                 }
             }
             PlayerAction::TrainUnit { building_id, kind_id } => {
                 if let Some(e) = hecs::Entity::from_bits(building_id) {
+                    // Ověř, že budova patří danému týmu
+                    if let Ok(t) = world.get::<&Team>(e) { if t.0 != team { continue; } }
                     if let Ok(mut pq) = world.get::<&mut ProductionQueue>(e) {
                         let bt = unit_build_time(&kind_id);
-                        if pq.current.is_none() { pq.current = Some((kind_id, bt)); }
+                        if pq.current.is_none() { pq.start(kind_id, bt); }
                         else { pq.enqueue(kind_id); }
                     }
                 }
             }
             PlayerAction::SpawnUnit { kind_id, x, y } => {
                 spawn_unit_by_kind(world, &kind_id, Vec2::new(x, y), team);
+            }
+            PlayerAction::PatrolUnit { unit_ids, target_x, target_y } => {
+                let target = Vec2::new(target_x, target_y);
+                for uid in unit_ids {
+                    if let Some(e) = hecs::Entity::from_bits(uid) {
+                        if let Ok(t) = world.get::<&Team>(e) { if t.0 != team { continue; } }
+                        let pos = world.get::<&Position>(e).ok().map(|p| p.0).unwrap_or_default();
+                        let flags = world.get::<&MoveFlags>(e).ok()
+                            .map(|f| (*f).clone()).unwrap_or_default();
+                        let _ = world.remove_one::<MoveOrder>(e);
+                        let _ = world.remove_one::<AttackOrder>(e);
+                        let _ = world.remove_one::<PatrolOrder>(e);
+                        let _ = world.insert_one(e, PatrolOrder { point_a: pos, point_b: target, going_b: true });
+                        let _ = world.insert_one(e, MoveOrder { target, speed: 128.0, flags });
+                        // Neblokujeme AI – patrol se má chovat jako autonomní pohyb
+                    }
+                }
+            }
+            PlayerAction::UseAbility { unit_id, ability_id, target_id, target_x, target_y } => {
+                ability_events.push((team, unit_id, ability_id, target_id, target_x, target_y));
+            }
+            PlayerAction::CancelProduction { building_id } => {
+                if let Some(e) = hecs::Entity::from_bits(building_id) {
+                    if let Ok(t) = world.get::<&Team>(e) { if t.0 != team { continue; } }
+                    if let Ok(mut pq) = world.get::<&mut ProductionQueue>(e) {
+                        pq.current = None;
+                    }
+                }
             }
         }
     }
@@ -299,7 +363,7 @@ fn apply_cmd(world: &mut World, cmd: ScriptCmd) {
             if let Some(e) = hecs::Entity::from_bits(building_id) {
                 if let Ok(mut pq) = world.get::<&mut ProductionQueue>(e) {
                     let t = if build_time > 0.0 { build_time } else { 30.0 };
-                    if pq.current.is_none() { pq.current = Some((kind_id, t)); }
+                    if pq.current.is_none() { pq.start(kind_id, t); }
                     else { pq.enqueue(kind_id); }
                 }
             }
@@ -313,6 +377,17 @@ fn apply_cmd(world: &mut World, cmd: ScriptCmd) {
             if let Some(e) = hecs::Entity::from_bits(entity_id) {
                 let _ = world.remove_one::<AiController>(e);
                 let _ = world.insert_one(e, AiController::new(script_id, tick_interval.max(0.1)));
+            }
+        }
+        ScriptCmd::SetAbilityCooldown { entity_id, ability_id, cooldown } => {
+            if let Some(e) = hecs::Entity::from_bits(entity_id) {
+                // Přidej AbilityCooldowns pokud neexistuje
+                if world.get::<&AbilityCooldowns>(e).is_err() {
+                    let _ = world.insert_one(e, AbilityCooldowns::new());
+                }
+                if let Ok(mut cd) = world.get::<&mut AbilityCooldowns>(e) {
+                    cd.set(ability_id, cooldown);
+                }
             }
         }
     }
@@ -347,12 +422,26 @@ fn build_snapshot(world: &World, tick: u64) -> ServerMsg {
     let entities: Vec<EntitySnapshot> = world
         .query::<(&Position, &Health, &Team, &UnitKindId)>().iter()
         .filter(|(_, (_, hp, ..))| hp.is_alive())
-        .map(|(e, (pos, hp, team, kind))| EntitySnapshot {
-            id: e.to_bits().into(),
-            x: pos.0.x, y: pos.0.y,
-            hp: hp.current, hp_max: hp.max,
-            team: team.0,
-            kind: kind.0.clone(),
+        .map(|(e, (pos, hp, team, kind))| {
+            let (prod_kind, prod_progress, prod_queue_len) =
+                if let Ok(pq) = world.get::<&ProductionQueue>(e) {
+                    let pk  = pq.current.as_ref().map(|(k, _, _)| k.clone());
+                    let pp  = pq.progress();
+                    let pql = pq.queue.len().min(255) as u8;
+                    (pk, pp, pql)
+                } else {
+                    (None, 0.0, 0)
+                };
+            EntitySnapshot {
+                id: e.to_bits().into(),
+                x: pos.0.x, y: pos.0.y,
+                hp: hp.current, hp_max: hp.max,
+                team: team.0,
+                kind: kind.0.clone(),
+                prod_kind,
+                prod_progress,
+                prod_queue_len,
+            }
         }).collect();
     ServerMsg::GameState { tick, entities }
 }
@@ -409,7 +498,6 @@ fn spawn_unit_by_kind(world: &mut World, kind_id: &str, pos: Vec2, team: u8) -> 
         flags,
         AttackStats { damage: d.dmg, pierce: d.pierce, armor: d.armor, range: d.range,
                       cooldown: d.cd, cooldown_left: 0.0 },
-        AiController::new(d.ai, 0.5),
     ))
 }
 

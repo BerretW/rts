@@ -102,15 +102,31 @@ pub struct EntitySnapshot {
     pub hp_max: i32,
     pub team:   u8,
     pub kind:   String,
+    /// Aktuálně vyráběná jednotka (pouze budovy)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prod_kind:      Option<String>,
+    /// Postup výroby 0.0..1.0
+    #[serde(default)]
+    pub prod_progress:  f32,
+    /// Počet jednotek ve frontě (bez aktuální)
+    #[serde(default)]
+    pub prod_queue_len: u8,
 }
 
 /// Herní akce hráče v jednom ticku.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum PlayerAction {
-    MoveUnits    { unit_ids: Vec<u64>, target_x: f32, target_y: f32 },
-    AttackUnit   { attacker_ids: Vec<u64>, target_id: u64 },
-    StopUnits    { unit_ids: Vec<u64> },
-    TrainUnit    { building_id: u64, kind_id: String },
-    SpawnUnit    { kind_id: String, x: f32, y: f32 },
+    MoveUnits        { unit_ids: Vec<u64>, target_x: f32, target_y: f32 },
+    AttackUnit       { attacker_ids: Vec<u64>, target_id: u64 },
+    StopUnits        { unit_ids: Vec<u64> },
+    TrainUnit        { building_id: u64, kind_id: String },
+    SpawnUnit        { kind_id: String, x: f32, y: f32 },
+    /// Hlídkování mezi aktuální pozicí a cílovým bodem
+    PatrolUnit       { unit_ids: Vec<u64>, target_x: f32, target_y: f32 },
+    /// Použití speciální schopnosti
+    UseAbility       { unit_id: u64, ability_id: String,
+                       target_id: Option<u64>, target_x: f32, target_y: f32 },
+    /// Zruší aktuální výrobu v budově
+    CancelProduction { building_id: u64 },
 }

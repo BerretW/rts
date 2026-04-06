@@ -1,0 +1,11 @@
+[build]
+# Nativní instrukce pro vývojářský stroj (nezahrnovat do distribuovatelných buildů)
+# rustflags = ["-C", "target-cpu=native"]
+
+[target.x86_64-pc-windows-msvc]
+# Rychlejší linkování ve vývoji
+linker = "rust-lld"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

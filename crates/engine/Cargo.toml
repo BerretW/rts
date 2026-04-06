@@ -1,0 +1,16 @@
+[package]
+name    = "engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu       = "22"
+winit      = "0.30"
+glam       = { workspace = true }
+bytemuck   = { workspace = true }
+image      = { version = "0.25", default-features = false, features = ["png"] }
+hecs       = "0.10"
+log        = { workspace = true }
+env_logger = "0.11"
+pollster   = "0.3"
+thiserror  = { workspace = true }

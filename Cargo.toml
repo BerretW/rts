@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/engine",
+    "crates/game",
+]
+resolver = "2"
+
+[workspace.dependencies]
+glam    = { version = "0.28", features = ["bytemuck"] }
+bytemuck = { version = "1.16", features = ["derive"] }
+log     = "0.4"
+thiserror = "2"
+
+[profile.dev]
+opt-level = 1          # základní optimalizace ve vývoji pro lepší fps
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -4,6 +4,7 @@ mod defs;
 mod screens;
 mod scripting;
 mod state;
+mod net;
 
 use state::GameRoot;
 

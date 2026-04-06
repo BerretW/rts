@@ -129,6 +129,16 @@ impl<G: Game> ApplicationHandler for AppRunner<G> {
                 if let PhysicalKey::Code(code) = ke.physical_key {
                     s.input.on_key(code, ke.state);
                 }
+                // Předej zadané znaky textovým polím UI
+                if ke.state == winit::event::ElementState::Pressed {
+                    if let Some(text) = &ke.text {
+                        let s_text = text.as_str();
+                        // Filtruj řídicí znaky (backspace, enter atd. se zpracují přes KeyCode)
+                        if s_text.chars().all(|c| !c.is_control()) {
+                            s.input.on_text_input(s_text);
+                        }
+                    }
+                }
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 s.input.on_mouse_button(button, state);

@@ -12,6 +12,7 @@ use engine::winit::event::MouseButton;
 use super::{Screen, Transition};
 use super::in_game::InGameScreen;
 use super::editor::EditorScreen;
+use super::lobby::LobbyScreen;
 
 pub struct MainMenuScreen {
     white_bg: Option<engine::wgpu::BindGroup>,
@@ -70,9 +71,15 @@ impl Screen for MainMenuScreen {
             return Transition::To(Box::new(EditorScreen::new()));
         }
 
+        // "Multiplayer"
+        let r2 = Self::btn_rect(sw, sh, 2);
+        if r2.contains(input.mouse_pos) && input.mouse_just_released(MouseButton::Left) {
+            return Transition::To(Box::new(LobbyScreen::new()));
+        }
+
         // "Exit"
-        let r3 = Self::btn_rect(sw, sh, 3);
-        if r3.contains(input.mouse_pos) && input.mouse_just_released(MouseButton::Left) {
+        let r4 = Self::btn_rect(sw, sh, 4);
+        if r4.contains(input.mouse_pos) && input.mouse_just_released(MouseButton::Left) {
             return Transition::Exit;
         }
 
@@ -121,14 +128,15 @@ impl Screen for MainMenuScreen {
         }
 
         // ── Tlačítka ──────────────────────────────────────────────────────
-        let labels_colors: [([f32;4], [f32;4]); 4] = [
+        let labels_colors: [([f32;4], [f32;4]); 5] = [
             (colors::BTN_NORMAL,           [0.15, 0.55, 0.20, 1.0]),   // New Game
-            ([0.30, 0.22, 0.10, 1.0],      [0.75, 0.50, 0.10, 1.0]),   // Editor – oranžová
+            ([0.30, 0.22, 0.10, 1.0],      [0.75, 0.50, 0.10, 1.0]),   // Editor
+            ([0.10, 0.25, 0.40, 1.0],      [0.20, 0.50, 0.80, 1.0]),   // Multiplayer
             ([0.25, 0.20, 0.40, 1.0],      [0.35, 0.28, 0.55, 1.0]),   // Options
             (colors::BTN_DANGER,           [0.70, 0.20, 0.15, 1.0]),   // Exit
         ];
 
-        let btn_labels = ["New Game", "Editor", "Options", "Exit"];
+        let btn_labels = ["New Game", "Editor", "Multiplayer", "Options", "Exit"];
 
         for (i, ((base, accent), label)) in labels_colors.iter().zip(btn_labels.iter()).enumerate() {
             let rect = Self::btn_rect(sw, sh, i);

@@ -163,8 +163,70 @@ pub fn register(lua: &Lua) -> LuaResult<()> {
     // ── Util: tile size ───────────────────────────────────────────────────────
     e.set("TILE_SIZE", 32.0f32)?;
 
+    // ── Asset loading ─────────────────────────────────────────────────────────
+
+    // Engine.assets_dir() → string – cesta ke složce assets/
+    e.set("assets_dir", lua.create_function(|_, ()| {
+        let dir = locate_assets_dir();
+        Ok(dir.to_string_lossy().to_string())
+    })?)?;
+
+    // Engine.load_json(path) → table
+    // Načte JSON soubor relativně k assets_dir a vrátí ho jako Lua tabulku.
+    e.set("load_json", lua.create_function(|lua, path: String| {
+        let full = locate_assets_dir().join(&path);
+        let text = std::fs::read_to_string(&full)
+            .map_err(|e| LuaError::RuntimeError(format!("load_json {:?}: {e}", full)))?;
+        let val: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| LuaError::RuntimeError(format!("load_json parse: {e}")))?;
+        json_to_lua(lua, &val)
+    })?)?;
+
+    // Engine.load_asset_text(path) → string
+    e.set("load_asset_text", lua.create_function(|_, path: String| {
+        let full = locate_assets_dir().join(&path);
+        std::fs::read_to_string(&full)
+            .map_err(|e| LuaError::RuntimeError(format!("load_asset_text {:?}: {e}", full)))
+    })?)?;
+
     lua.globals().set("Engine", e)?;
     Ok(())
+}
+
+// ── Asset helpers ─────────────────────────────────────────────────────────────
+
+/// Najde složku assets/ – vedle exe nebo od working directory.
+fn locate_assets_dir() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let c = exe.parent().unwrap_or(std::path::Path::new(".")).join("assets");
+        if c.exists() { return c; }
+    }
+    std::path::PathBuf::from("assets")
+}
+
+/// Převede serde_json::Value na Lua hodnotu.
+fn json_to_lua(lua: &mlua::Lua, val: &serde_json::Value) -> LuaResult<LuaValue> {
+    match val {
+        serde_json::Value::Null       => Ok(LuaValue::Nil),
+        serde_json::Value::Bool(b)    => Ok(LuaValue::Boolean(*b)),
+        serde_json::Value::Number(n)  => {
+            if let Some(i) = n.as_i64() { Ok(LuaValue::Integer(i)) }
+            else { Ok(LuaValue::Number(n.as_f64().unwrap_or(0.0))) }
+        }
+        serde_json::Value::String(s)  => Ok(LuaValue::String(lua.create_string(s)?)),
+        serde_json::Value::Array(arr) => {
+            let t = lua.create_table()?;
+            for (i, v) in arr.iter().enumerate() {
+                t.raw_set(i + 1, json_to_lua(lua, v)?)?;
+            }
+            Ok(LuaValue::Table(t))
+        }
+        serde_json::Value::Object(obj) => {
+            let t = lua.create_table()?;
+            for (k, v) in obj { t.raw_set(k.as_str(), json_to_lua(lua, v)?)?; }
+            Ok(LuaValue::Table(t))
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

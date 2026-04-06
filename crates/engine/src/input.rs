@@ -22,6 +22,8 @@ pub struct Input {
     pub mouse_delta: Vec2,
     /// Pohyb kolečka myši (kladné = nahoru).
     pub scroll_delta: f32,
+    /// Znaky zadané klávesnicí v tomto framu (pro textová pole).
+    pub text_input: String,
 }
 
 impl Input {
@@ -88,6 +90,11 @@ impl Input {
         self.scroll_delta += delta;
     }
 
+    /// Přidá zadaný text z klávesnice (voláno z engine pro každý stisk klávesy).
+    pub fn on_text_input(&mut self, text: &str) {
+        self.text_input.push_str(text);
+    }
+
     pub fn mouse_just_pressed(&self, button: MouseButton) -> bool {
         self.mouse_just_pressed.contains(&button)
     }
@@ -110,5 +117,6 @@ impl Input {
         self.mouse_just_released.clear();
         self.mouse_delta = Vec2::ZERO;
         self.scroll_delta = 0.0;
+        self.text_input.clear();
     }
 }

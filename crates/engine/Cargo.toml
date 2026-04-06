@@ -9,6 +9,7 @@ winit      = "0.30"
 glam       = { workspace = true }
 bytemuck   = { workspace = true }
 image      = { version = "0.25", default-features = false, features = ["png"] }
+font8x8    = { version = "0.2", features = ["unicode"] }
 hecs       = "0.10"
 log        = { workspace = true }
 env_logger = "0.11"

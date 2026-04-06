@@ -1,0 +1,2 @@
+-- ai/manifest.lua
+-- Pořadí načtení: za base a units

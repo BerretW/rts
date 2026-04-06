@@ -11,6 +11,7 @@ use engine::winit::event::MouseButton;
 
 use super::{Screen, Transition};
 use super::in_game::InGameScreen;
+use super::editor::EditorScreen;
 
 pub struct MainMenuScreen {
     white_bg: Option<engine::wgpu::BindGroup>,
@@ -63,9 +64,15 @@ impl Screen for MainMenuScreen {
             return Transition::To(Box::new(InGameScreen::new()));
         }
 
+        // "Editor"
+        let r1 = Self::btn_rect(sw, sh, 1);
+        if r1.contains(input.mouse_pos) && input.mouse_just_released(MouseButton::Left) {
+            return Transition::To(Box::new(EditorScreen::new()));
+        }
+
         // "Exit"
-        let r2 = Self::btn_rect(sw, sh, 2);
-        if r2.contains(input.mouse_pos) && input.mouse_just_released(MouseButton::Left) {
+        let r3 = Self::btn_rect(sw, sh, 3);
+        if r3.contains(input.mouse_pos) && input.mouse_just_released(MouseButton::Left) {
             return Transition::Exit;
         }
 
@@ -114,40 +121,34 @@ impl Screen for MainMenuScreen {
         }
 
         // ── Tlačítka ──────────────────────────────────────────────────────
-        let labels_colors: [([f32;4], [f32;4]); 3] = [
-            (colors::BTN_NORMAL,  [0.15, 0.55, 0.20, 1.0]),   // New Game – zelenkavý akcent
-            ([0.25, 0.20, 0.40, 1.0], [0.35, 0.28, 0.55, 1.0]), // Options
-            (colors::BTN_DANGER,  [0.70, 0.20, 0.15, 1.0]),   // Exit – červená
+        let labels_colors: [([f32;4], [f32;4]); 4] = [
+            (colors::BTN_NORMAL,           [0.15, 0.55, 0.20, 1.0]),   // New Game
+            ([0.30, 0.22, 0.10, 1.0],      [0.75, 0.50, 0.10, 1.0]),   // Editor – oranžová
+            ([0.25, 0.20, 0.40, 1.0],      [0.35, 0.28, 0.55, 1.0]),   // Options
+            (colors::BTN_DANGER,           [0.70, 0.20, 0.15, 1.0]),   // Exit
         ];
 
-        for (i, (base, accent)) in labels_colors.iter().enumerate() {
-            let rect = Self::btn_rect(sw, sh, i);
-            let clicked = ui.button(rect, *base);
+        let btn_labels = ["New Game", "Editor", "Options", "Exit"];
 
-            // Barevný akcentový proužek vlevo
+        for (i, ((base, accent), label)) in labels_colors.iter().zip(btn_labels.iter()).enumerate() {
+            let rect = Self::btn_rect(sw, sh, i);
+            ui.button(rect, *base);
+
+            // Akcentový proužek vlevo
             ui.panel(Rect::new(rect.x, rect.y, 5.0, rect.h), *accent);
 
-            // Tečky jako placeholder textu (3 tečky = "nápis")
-            let dot_x = rect.x + 20.0;
-            let dot_y = rect.y + rect.h * 0.5 - 4.0;
-            let dot_colors = [*base, *accent, *base];
-            for (j, dc) in dot_colors.iter().enumerate() {
-                ui.panel(Rect::new(dot_x + j as f32 * 16.0, dot_y, 10.0, 8.0),
-                         lighten(*dc, 1.4));
-            }
-
-            // Kód akce – klíč pro debug výpis (v produkci text renderer)
-            let _ = clicked;
+            // Text
+            ui.label_shadowed(rect.x + 16.0, rect.y + (rect.h - 16.0) * 0.5, label, 2.0, colors::WHITE);
         }
+
+        // ── Logo text ────────────────────────────────────────────────────────
+        ui.label_centered(Rect::new(logo_x, logo_y, logo_w, logo_h), "RTS Engine", 2.0,
+                          [0.85, 0.92, 1.0, 1.0]);
 
         // ── Verze (spodní lišta) ──────────────────────────────────────────
         ui.panel(Rect::new(0.0, sh - 24.0, sw, 24.0), [0.06, 0.06, 0.08, 0.9]);
         ui.border(Rect::new(0.0, sh - 24.0, sw, 24.0), 1.0, colors::BORDER);
-        // Verze jako malé obdélníčky
-        for i in 0..5i32 {
-            ui.panel(Rect::new(10.0 + i as f32 * 8.0, sh - 18.0, 5.0, 12.0),
-                     [0.3, 0.4, 0.5, 0.8]);
-        }
+        ui.label(8.0, sh - 17.0, "v0.1.0  |  Warcraft-2 style RTS", 1.0, colors::GREY);
     }
 
     fn texture(&self) -> &engine::wgpu::BindGroup {

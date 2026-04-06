@@ -1,5 +1,6 @@
 pub mod app;
 pub mod camera;
+pub mod font;
 pub mod input;
 pub mod tilemap;
 pub mod renderer;

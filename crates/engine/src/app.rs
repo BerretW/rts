@@ -8,6 +8,7 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::{Camera, CameraUniform};
+use crate::font;
 use crate::input::Input;
 use crate::renderer::{RenderContext, SpriteBatch, Texture};
 use crate::ui::UiCtx;
@@ -21,7 +22,6 @@ pub trait Game: 'static {
     fn init(&mut self, ctx: &RenderContext, batch: &SpriteBatch, camera: &mut Camera);
 
     /// Volá engine před `update()` kdykoliv `needs_screen_init()` vrátí true.
-    /// Slouží k re-inicializaci GPU prostředků po přechodu na nový screen.
     fn on_screen_init(&mut self, _ctx: &RenderContext, _batch: &SpriteBatch) {}
 
     /// Vrátí true pokud je potřeba zavolat `on_screen_init()` před dalším snímkem.
@@ -47,7 +47,9 @@ struct Running<G: Game> {
     ctx:         RenderContext,
     world_batch: SpriteBatch,
     ui_batch:    SpriteBatch,
+    text_batch:  SpriteBatch,       // druhý batch pro text
     white_bg:    wgpu::BindGroup,   // UI textura – bílý pixel
+    font_bg:     wgpu::BindGroup,   // textura font atlasu
     camera:      Camera,
     input:       Input,
     game:        G,
@@ -86,10 +88,16 @@ impl<G: Game> ApplicationHandler for AppRunner<G> {
 
         let world_batch = SpriteBatch::new(&ctx);
         let ui_batch    = SpriteBatch::new(&ctx);
+        let text_batch  = SpriteBatch::new(&ctx);
 
-        // Bílý pixel pro UI
+        // Bílý pixel pro UI solid-color prvky
         let white_tex = Texture::white_pixel(&ctx);
         let white_bg  = white_tex.create_bind_group(&ctx, &ui_batch.texture_bind_group_layout);
+
+        // Font atlas textura
+        let font_atlas = font::build_atlas();
+        let font_tex   = Texture::from_rgba8(&ctx, &font_atlas, "font_atlas");
+        let font_bg    = font_tex.create_bind_group(&ctx, &text_batch.texture_bind_group_layout);
 
         let mut camera = Camera::new(size.width as f32, size.height as f32);
         let input      = Input::new();
@@ -98,7 +106,8 @@ impl<G: Game> ApplicationHandler for AppRunner<G> {
         game.init(&ctx, &world_batch, &mut camera);
 
         self.state = Some(Running {
-            window, ctx, world_batch, ui_batch, white_bg, camera, input, game,
+            window, ctx, world_batch, ui_batch, text_batch, white_bg, font_bg,
+            camera, input, game,
             last_t: Instant::now(),
         });
     }
@@ -144,7 +153,7 @@ impl<G: Game> ApplicationHandler for AppRunner<G> {
                 // ── Update ───────────────────────────────────────────────
                 s.game.update(dt, &s.input, &mut s.camera);
 
-                // ── Screen re-init (volá se PO update, kde mohl nastat přechod) ──
+                // ── Screen re-init ───────────────────────────────────────
                 if s.game.needs_screen_init() {
                     s.game.on_screen_init(&s.ctx, &s.world_batch);
                 }
@@ -154,9 +163,10 @@ impl<G: Game> ApplicationHandler for AppRunner<G> {
                 s.world_batch.update_camera(&s.ctx, &cam_u);
 
                 // ── UI camera → GPU (screen-space) ───────────────────────
-                let vp = s.camera.viewport();
+                let vp   = s.camera.viewport();
                 let ui_u = CameraUniform::screen_space(vp.x, vp.y);
                 s.ui_batch.update_camera(&s.ctx, &ui_u);
+                s.text_batch.update_camera(&s.ctx, &ui_u);
 
                 // ── Render ───────────────────────────────────────────────
                 match s.ctx.surface.get_current_texture() {
@@ -190,13 +200,22 @@ impl<G: Game> ApplicationHandler for AppRunner<G> {
                         let world_tex = s.game.texture() as *const wgpu::BindGroup;
                         s.world_batch.flush(&s.ctx, &mut enc, &view, unsafe { &*world_tex });
 
-                        // UI render
+                        // UI render (solid-color prvky)
                         {
-                            let mut ui = UiCtx::new(&mut s.ui_batch, &s.input, vp);
+                            let mut ui = UiCtx::new(
+                                &mut s.ui_batch,
+                                &mut s.text_batch,
+                                &s.input,
+                                vp,
+                            );
                             s.game.render_ui(&mut ui);
                         }
                         let white = &s.white_bg as *const wgpu::BindGroup;
                         s.ui_batch.flush(&s.ctx, &mut enc, &view, unsafe { &*white });
+
+                        // Text render (font atlas)
+                        let font = &s.font_bg as *const wgpu::BindGroup;
+                        s.text_batch.flush(&s.ctx, &mut enc, &view, unsafe { &*font });
 
                         s.ctx.queue.submit(std::iter::once(enc.finish()));
                         surface_tex.present();

@@ -1,6 +1,7 @@
 pub mod loading;
 pub mod main_menu;
 pub mod in_game;
+pub mod editor;
 
 use engine::{
     camera::Camera,

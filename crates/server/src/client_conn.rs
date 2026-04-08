@@ -146,12 +146,12 @@ async fn recv_loop<R: tokio::io::AsyncRead + Unpin>(
             }
 
             ClientMsg::StartGame => {
-                let (scripts_dir, assets_dir) = {
+                let (resources_dir, assets_dir) = {
                     let m = mgr.lock().await;
-                    (m.scripts_dir.clone(), m.assets_dir.clone())
+                    (m.resources_dir.clone(), m.assets_dir.clone())
                 };
                 let mut m = mgr.lock().await;
-                if let Err(e) = m.start_game(handle.id, scripts_dir, assets_dir) {
+                if let Err(e) = m.start_game(handle.id, resources_dir, assets_dir) {
                     let _ = handle.tx.send(ServerMsg::Error { msg: e });
                 }
             }
@@ -167,6 +167,11 @@ async fn recv_loop<R: tokio::io::AsyncRead + Unpin>(
             ClientMsg::PlayerInput { tick, actions } => {
                 let m = mgr.lock().await;
                 m.deliver_input(handle.id, tick, actions);
+            }
+
+            ClientMsg::ScriptEvent { name, args_json } => {
+                let m = mgr.lock().await;
+                m.deliver_script_event(handle.id, name, args_json);
             }
         }
     }

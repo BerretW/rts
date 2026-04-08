@@ -15,6 +15,7 @@ use engine::winit::event::MouseButton;
 use net::{ClientMsg, EntitySnapshot, PlayerAction, ServerMsg};
 
 use crate::net::NetClient;
+use crate::scripting::LuaRuntime;
 
 use super::{Screen, Transition};
 
@@ -141,6 +142,7 @@ fn ability_target_type(id: &str) -> AbilityTarget {
 
 pub struct MultiplayerScreen {
     net:      NetClient,
+    lua:      Option<LuaRuntime>,
     map_id:   String,
     my_team:  u8,
 
@@ -185,8 +187,23 @@ impl MultiplayerScreen {
         camera.position = Vec2::new(base_x, base_y);
         camera.zoom     = 1.0;
 
+        // Pokus o načtení client Lua resources (neblokuje pokud neexistují)
+        let lua = match LuaRuntime::new() {
+            Ok(rt) => {
+                let resources_dir = locate_resources_dir();
+                if let Err(e) = rt.load_resources(&resources_dir) {
+                    log::warn!("multiplayer: resources nenačteny: {e}");
+                }
+                Some(rt)
+            }
+            Err(e) => {
+                log::warn!("multiplayer: Lua init selhala: {e}");
+                None
+            }
+        };
+
         Self {
-            net, map_id, my_team,
+            net, lua, map_id, my_team,
             map_tiles, map_w, map_h,
             entities:         Vec::new(),
             tick:             0,
@@ -213,6 +230,13 @@ impl MultiplayerScreen {
                     None                          => format!("Remíza - {}", reason),
                 };
                 self.game_over = Some(text);
+            }
+            ServerMsg::ScriptEvent { name, args_json } => {
+                if let Some(lua) = &self.lua {
+                    if let Err(e) = lua.trigger_network_event(&name, &args_json) {
+                        log::warn!("client script event '{}': {e}", name);
+                    }
+                }
             }
             _ => {}
         }
@@ -268,6 +292,21 @@ impl Screen for MultiplayerScreen {
         // Síťové zprávy
         for msg in self.net.drain() {
             self.handle_msg(msg);
+        }
+
+        // Odešli TriggerServerEvent volání z klientských skriptů
+        if let Some(lua) = &self.lua {
+            match lua.drain_server_events() {
+                Ok(events) => {
+                    for ev in events {
+                        self.net.send(ClientMsg::ScriptEvent {
+                            name:      ev.name,
+                            args_json: ev.args_json,
+                        });
+                    }
+                }
+                Err(e) => log::warn!("drain_server_events: {e}"),
+            }
         }
 
         // Odešli akce sesbírané v minulém render_ui (tlačítka trénování / schopností)
@@ -786,6 +825,14 @@ impl Screen for MultiplayerScreen {
 
 fn darken(c: [f32; 4], f: f32) -> [f32; 4] {
     [c[0]*f, c[1]*f, c[2]*f, c[3]]
+}
+
+fn locate_resources_dir() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let c = exe.parent().unwrap_or(std::path::Path::new(".")).join("resources");
+        if c.exists() { return c; }
+    }
+    std::path::PathBuf::from("resources")
 }
 
 fn shrink(r: Rect, by: f32) -> Rect {

@@ -11,16 +11,16 @@ use crate::game_session::{GameSession, GameSessionHandle};
 // ── LobbyManager ─────────────────────────────────────────────────────────────
 
 pub struct LobbyManager {
-    pub scripts_dir: PathBuf,
+    pub resources_dir: PathBuf,
     pub assets_dir:  PathBuf,
     pub lobbies:     HashMap<u64, Lobby>,
     next_id:         u64,
 }
 
 impl LobbyManager {
-    pub fn new(scripts_dir: PathBuf, assets_dir: PathBuf) -> Self {
+    pub fn new(resources_dir: PathBuf, assets_dir: PathBuf) -> Self {
         Self {
-            scripts_dir,
+            resources_dir,
             assets_dir,
             lobbies: HashMap::new(),
             next_id: 1,
@@ -130,7 +130,7 @@ impl LobbyManager {
     pub fn start_game(
         &mut self,
         host_id: u64,
-        scripts_dir: PathBuf,
+        resources_dir: PathBuf,
         assets_dir:  PathBuf,
     ) -> Result<(), String> {
         let lobby = self.lobbies.values_mut()
@@ -145,7 +145,7 @@ impl LobbyManager {
         let map_id  = lobby.map_id.clone();
 
         // Spustí GameSession v pozadí
-        let session = GameSession::start(players, map_id, scripts_dir, assets_dir);
+        let session = GameSession::start(players, map_id, resources_dir, assets_dir);
         lobby.game = Some(session);
         Ok(())
     }
@@ -165,6 +165,18 @@ impl LobbyManager {
             if lobby.players.contains_key(&client_id) {
                 if let Some(game) = &lobby.game {
                     game.send_input(client_id, tick, actions);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Přepošle Lua script event od klienta do aktivní game session.
+    pub fn deliver_script_event(&self, client_id: u64, name: String, args_json: String) {
+        for lobby in self.lobbies.values() {
+            if lobby.players.contains_key(&client_id) {
+                if let Some(game) = &lobby.game {
+                    game.send_script_event(client_id, name, args_json);
                     return;
                 }
             }

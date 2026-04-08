@@ -5,6 +5,7 @@ use engine::tilemap::{TileKind, TileMap, TILE_SIZE};
 
 use crate::components::{
     AttackOrder, AttackStats, AiController, Health,
+    HarvestKind, HarvestOrder, HarvestState,
     MoveFlags, MoveOrder, Position, ProductionQueue, Velocity,
 };
 
@@ -225,6 +226,109 @@ pub fn ai_tick_system(world: &mut World, dt: f32) -> Vec<AiTickEvent> {
         }
     }
     ticks
+}
+
+// ── Sklizeň surovin ───────────────────────────────────────────────────────────
+
+pub struct HarvestResult {
+    pub gold:   u32,
+    pub lumber: u32,
+    pub team:   u8,
+}
+
+/// Spravuje stavový stroj sklizně pracovníků.
+///
+/// Fáze:  GoingToSource → Harvesting (čas 4 s) → GoingToDepot → GoingToSource …
+/// Vrátí suroviny, které pracovníci právě odevzdali ve skladu.
+pub fn harvest_system(world: &mut World, dt: f32) -> Vec<HarvestResult> {
+    // ── Fáze 1: odpočítej čas u zdroje ────────────────────────────────────────
+    let harvesting_done: Vec<hecs::Entity> = {
+        let mut done = Vec::new();
+        for (entity, harv) in world.query_mut::<&mut HarvestOrder>() {
+            if harv.state == HarvestState::Harvesting {
+                harv.timer -= dt;
+                if harv.timer <= 0.0 {
+                    done.push(entity);
+                }
+            }
+        }
+        done
+    };
+
+    // ── Fáze 2: hotová těžba → jdi do skladu ─────────────────────────────────
+    for entity in harvesting_done {
+        let (depot, max_carry) = {
+            let h = match world.get::<&HarvestOrder>(entity) { Ok(h) => h, Err(_) => continue };
+            (h.depot, h.max_carry)
+        };
+        if let Ok(mut h) = world.get::<&mut HarvestOrder>(entity) {
+            h.carried = max_carry;
+            h.state   = HarvestState::GoingToDepot;
+        }
+        let flags = world.get::<&MoveFlags>(entity)
+            .ok().map(|f| (*f).clone()).unwrap_or_default();
+        let _ = world.insert_one(entity, MoveOrder { target: depot, speed: 128.0, flags });
+    }
+
+    // ── Fáze 3: příchod ke zdroji → začni těžit ───────────────────────────────
+    let source_arrivals: Vec<hecs::Entity> = world
+        .query::<(&Position, &HarvestOrder)>()
+        .iter()
+        .filter(|(_, (pos, h))| {
+            h.state == HarvestState::GoingToSource
+            && (pos.0 - h.source).length() < TILE_SIZE * 1.8
+        })
+        .map(|(e, _)| e)
+        .collect();
+
+    for entity in source_arrivals {
+        let _ = world.remove_one::<MoveOrder>(entity);
+        if let Ok(mut v) = world.get::<&mut Velocity>(entity) { v.0 = Vec2::ZERO; }
+        if let Ok(mut h) = world.get::<&mut HarvestOrder>(entity) {
+            h.state = HarvestState::Harvesting;
+            h.timer = 4.0;
+        }
+    }
+
+    // ── Fáze 4: příchod do skladu → odevzdej ─────────────────────────────────
+    struct DepotArrival {
+        entity: hecs::Entity,
+        team:   u8,
+        gold:   u32,
+        lumber: u32,
+        source: Vec2,
+    }
+
+    let depot_arrivals: Vec<DepotArrival> = world
+        .query::<(&Position, &HarvestOrder, &crate::components::Team)>()
+        .iter()
+        .filter(|(_, (pos, h, _))| {
+            h.state == HarvestState::GoingToDepot
+            && (pos.0 - h.depot).length() < TILE_SIZE * 2.0
+        })
+        .map(|(e, (_, h, t))| DepotArrival {
+            entity: e,
+            team:   t.0,
+            gold:   if h.kind == HarvestKind::Gold   { h.max_carry } else { 0 },
+            lumber: if h.kind == HarvestKind::Lumber { h.max_carry } else { 0 },
+            source: h.source,
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for arr in depot_arrivals {
+        results.push(HarvestResult { gold: arr.gold, lumber: arr.lumber, team: arr.team });
+        if let Ok(mut h) = world.get::<&mut HarvestOrder>(arr.entity) {
+            h.carried = 0;
+            h.state   = HarvestState::GoingToSource;
+        }
+        let flags = world.get::<&MoveFlags>(arr.entity)
+            .ok().map(|f| (*f).clone()).unwrap_or_default();
+        let _ = world.insert_one(arr.entity,
+            MoveOrder { target: arr.source, speed: 128.0, flags });
+    }
+
+    results
 }
 
 // ── Cleanup ───────────────────────────────────────────────────────────────────

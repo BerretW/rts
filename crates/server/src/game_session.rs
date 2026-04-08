@@ -22,16 +22,26 @@ use crate::world::*;
 const TICK_RATE: u8       = 20;
 const TICK_MS:   u64      = 1000 / TICK_RATE as u64;
 
+// ── Vstup do session ──────────────────────────────────────────────────────────
+
+pub enum SessionInput {
+    PlayerActions { client_id: u64, tick: u64, actions: Vec<PlayerAction> },
+    ScriptEvent   { client_id: u64, name: String, args_json: String },
+}
+
 // ── Handle pro komunikaci se session ─────────────────────────────────────────
 
 pub struct GameSessionHandle {
-    /// Posílání vstupů do session.
-    pub input_tx: mpsc::UnboundedSender<(u64, u64, Vec<PlayerAction>)>,
+    pub input_tx: mpsc::UnboundedSender<SessionInput>,
 }
 
 impl GameSessionHandle {
     pub fn send_input(&self, client_id: u64, tick: u64, actions: Vec<PlayerAction>) {
-        let _ = self.input_tx.send((client_id, tick, actions));
+        let _ = self.input_tx.send(SessionInput::PlayerActions { client_id, tick, actions });
+    }
+
+    pub fn send_script_event(&self, client_id: u64, name: String, args_json: String) {
+        let _ = self.input_tx.send(SessionInput::ScriptEvent { client_id, name, args_json });
     }
 }
 
@@ -43,10 +53,10 @@ impl GameSession {
     /// Spustí herní session na dedikovaném OS threadu.
     /// Lua (Rc interně) není Send – musíme použít vlastní thread.
     pub fn start(
-        players:     Vec<LobbyPlayer>,
-        map_id:      String,
-        scripts_dir: PathBuf,
-        assets_dir:  PathBuf,
+        players:       Vec<LobbyPlayer>,
+        map_id:        String,
+        resources_dir: PathBuf,
+        assets_dir:    PathBuf,
     ) -> GameSessionHandle {
         let (input_tx, input_rx) = mpsc::unbounded_channel();
 
@@ -58,7 +68,7 @@ impl GameSession {
 
             let local = tokio::task::LocalSet::new();
             local.block_on(&rt, async move {
-                let result = run_session(players, map_id, scripts_dir, assets_dir, input_rx).await;
+                let result = run_session(players, map_id, resources_dir, assets_dir, input_rx).await;
                 if let Err(e) = result {
                     log::error!("game session selhala: {e}");
                 }
@@ -72,16 +82,16 @@ impl GameSession {
 // ── Hlavní smyčka ─────────────────────────────────────────────────────────────
 
 async fn run_session(
-    players:     Vec<LobbyPlayer>,
-    map_id:      String,
-    scripts_dir: PathBuf,
-    assets_dir:  PathBuf,
-    mut input_rx: mpsc::UnboundedReceiver<(u64, u64, Vec<PlayerAction>)>,
+    players:       Vec<LobbyPlayer>,
+    map_id:        String,
+    resources_dir: PathBuf,
+    assets_dir:    PathBuf,
+    mut input_rx:  mpsc::UnboundedReceiver<SessionInput>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     log::info!("GameSession start: mapa={map_id}, hráčů={}", players.len());
 
     // Lua runtime – inicializujeme přímo (Lua je !Send, jsme na svém threadu)
-    let mut lua = LuaRuntime::new(&scripts_dir, assets_dir)
+    let lua = LuaRuntime::new(&resources_dir, assets_dir)
         .map_err(|e| format!("Lua init: {e}"))?;
 
     // ECS world + mapa
@@ -121,8 +131,17 @@ async fn run_session(
 
         // Shromáždí vstupy klientů za tento tick
         let mut pending: Vec<(u64, Vec<PlayerAction>)> = Vec::new();
-        while let Ok((cid, _tick, actions)) = input_rx.try_recv() {
-            pending.push((cid, actions));
+        while let Ok(input) = input_rx.try_recv() {
+            match input {
+                SessionInput::PlayerActions { client_id, actions, .. } => {
+                    pending.push((client_id, actions));
+                }
+                SessionInput::ScriptEvent { client_id, name, args_json } => {
+                    if let Err(e) = lua.trigger_network_event(&name, client_id, &args_json) {
+                        log::warn!("trigger_network_event '{}': {e}", name);
+                    }
+                }
+            }
         }
 
         // Aplikuj akce hráčů; sesbíráme použití schopností pro Lua zpracování
@@ -196,6 +215,25 @@ async fn run_session(
         match lua.drain_commands() {
             Ok(cmds) => { for cmd in cmds { apply_cmd(&mut world, cmd); } }
             Err(e)   => log::warn!("drain_commands: {e}"),
+        }
+
+        // Odešli TriggerClientEvent volání klientům
+        match lua.drain_client_events() {
+            Ok(events) => {
+                for ev in events {
+                    let msg = ServerMsg::ScriptEvent { name: ev.name, args_json: ev.args_json };
+                    if ev.target < 0 {
+                        // broadcast
+                        for p in &players { let _ = p.handle.tx.send(msg.clone()); }
+                    } else {
+                        let target_id = ev.target as u64;
+                        if let Some(p) = players.iter().find(|p| p.handle.id == target_id) {
+                            let _ = p.handle.tx.send(msg);
+                        }
+                    }
+                }
+            }
+            Err(e) => log::warn!("drain_client_events: {e}"),
         }
 
         // Broadcastni stav (každých 5 ticků = 4 Hz stačí pro plynulost na LAN)

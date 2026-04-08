@@ -37,6 +37,8 @@ pub enum ServerMsg {
     },
     GameState   { tick: u64, entities: Vec<EntitySnapshot> },
     GameOver    { winner_team: Option<u8>, reason: String },
+    /// Lua skript event server → klient
+    ScriptEvent { name: String, args_json: String },
 }
 
 // ── Serverbound (klient → server) ─────────────────────────────────────────────
@@ -60,6 +62,8 @@ pub enum ClientMsg {
 
     // Herní vstup
     PlayerInput     { tick: u64, actions: Vec<PlayerAction> },
+    /// Lua skript event klient → server
+    ScriptEvent     { name: String, args_json: String },
 }
 
 // ── Data ─────────────────────────────────────────────────────────────────────

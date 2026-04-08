@@ -23,17 +23,17 @@ async fn main() {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    let port        = parse_arg(&args, "--port",    "7777");
-    let scripts_dir = parse_arg(&args, "--scripts", "scripts");
-    let assets_dir  = parse_arg(&args, "--assets",  "assets");
+    let port          = parse_arg(&args, "--port",      "7777");
+    let resources_dir = parse_arg(&args, "--resources", "resources");
+    let assets_dir    = parse_arg(&args, "--assets",    "assets");
 
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse().expect("neplatná adresa");
     let listener = TcpListener::bind(addr).await.expect("nelze bindovat port");
     log::info!("RTS Server naslouchá na {addr}");
-    log::info!("Scripts: {scripts_dir}  |  Assets: {assets_dir}");
+    log::info!("Resources: {resources_dir}  |  Assets: {assets_dir}");
 
     let lobby_mgr = Arc::new(Mutex::new(LobbyManager::new(
-        scripts_dir.into(),
+        resources_dir.into(),
         assets_dir.into(),
     )));
 

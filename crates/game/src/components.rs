@@ -183,3 +183,46 @@ pub struct Unit(pub UnitKind);
 // ── Sight / fog of war ────────────────────────────────────────────────────────
 
 pub struct Sight(pub u32);
+
+// ── Budovy ────────────────────────────────────────────────────────────────────
+
+/// Marker: entita je budova (ne pohyblivá jednotka).
+pub struct IsBuilding;
+
+// ── Sklizeň surovin ───────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HarvestKind { Gold, Lumber }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HarvestState {
+    /// Pracovník jde ke zdroji.
+    GoingToSource,
+    /// Pracovník těží/kácí (čeká u zdroje).
+    Harvesting,
+    /// Pracovník nese suroviny zpět do základny.
+    GoingToDepot,
+}
+
+#[derive(Clone, Debug)]
+pub struct HarvestOrder {
+    /// Pozice zdroje (zlatý důl, les).
+    pub source:    Vec2,
+    /// Pozice skladu (Town Hall, Great Hall).
+    pub depot:     Vec2,
+    pub kind:      HarvestKind,
+    pub state:     HarvestState,
+    /// Aktuálně nesené množství.
+    pub carried:   u32,
+    /// Kolik unese najednou.
+    pub max_carry: u32,
+    /// Odpočet těžby (sekundy zbývající do dokončení).
+    pub timer:     f32,
+}
+
+/// Zdroj surovin na mapě (zlatý důl, les pro těžbu).
+pub struct ResourceSource {
+    pub kind:      HarvestKind,
+    /// Zbývající množství (-1 = nekonečno).
+    pub remaining: i32,
+}
